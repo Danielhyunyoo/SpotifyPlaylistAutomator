@@ -21,11 +21,11 @@ from logger_setup import get_logger
 
 logger = get_logger(__name__)
 
-# If you know your playlist's URI, paste it here to skip the
-# lookup-by-name step (a bit faster, and immune to renames). Leave
-# as None to always search by name. When found by name, the URI
-# gets logged so you can copy it in here afterwards.
-MAIN_PLAYLIST_URI = None
+# Hardcoded on purpose, this used to be a lookup-by-name call to the
+# Spotify API on every single hotkey press. Trusting a known URI
+# outright skips that entire network round trip, which is real,
+# felt latency between pressing the key and something happening.
+MAIN_PLAYLIST_URI = "spotify:playlist:49P4q7xjBtTJU2gGmyrm9v"
 MAIN_PLAYLIST_NAME = "It's Raining After All"
 
 # How many times to retry starting playback if Spotify's API says
@@ -65,17 +65,14 @@ def build_client():
 
 def find_main_playlist(sp):
     """
-    Finds the main playlist, preferring a direct URI lookup (fast)
-    and falling back to searching by name (slower, but resilient if
-    the saved URI ever goes stale).
+    Returns the main playlist. When MAIN_PLAYLIST_URI is set, this is
+    entirely free, zero API calls, we just trust it. Only falls back
+    to a name search (a real network call) if the URI was never
+    filled in, which matters for anyone cloning this fresh from the
+    example ahk/README before they've grabbed their own URI.
     """
     if MAIN_PLAYLIST_URI:
-        try:
-            playlist = sp.playlist(MAIN_PLAYLIST_URI)
-            logger.info(f"Found '{playlist['name']}' by saved URI")
-            return playlist
-        except Exception as e:
-            logger.warning(f"Saved playlist URI didn't resolve ({e}), falling back to name search")
+        return {"uri": MAIN_PLAYLIST_URI, "name": MAIN_PLAYLIST_NAME}
 
     # 50 limit to ensure we grab ALL our playlists
     playlists = sp.current_user_playlists(limit=50)
@@ -88,44 +85,19 @@ def find_main_playlist(sp):
     return None
 
 
-def toggle_if_already_playing(sp, main_playlist_uri):
+def get_current_playback(sp):
     """
-    If the main playlist is already the active context specifically
-    on the desktop app, just toggle play/pause instead of doing a
-    full relaunch. Returns True if it handled things (caller should
-    stop there), False if the normal launch-and-play flow should run
-    instead.
-
-    Deliberately scoped to the Computer device only, so if the
-    playlist happens to be playing on something else (a speaker,
-    a phone), we don't toggle that, we fall through and take over
-    on the PC instead, since that's what pressing the hotkey means.
+    Single current_playback() fetch, reused by main() for both the
+    toggle check and the "is the desktop already active" check,
+    instead of two separate API calls. Every round trip here is
+    latency you feel between pressing the hotkey and something
+    actually happening.
     """
     try:
-        playback = sp.current_playback()
+        return sp.current_playback()
     except Exception as e:
         logger.warning(f"Couldn't read current playback state: {e}")
-        return False
-
-    if not playback or not playback.get("device"):
-        return False
-
-    device = playback["device"]
-    context = playback.get("context")
-    is_our_playlist = context is not None and context.get("uri") == main_playlist_uri
-    is_desktop_device = device.get("type") == PREFERRED_DEVICE_TYPE
-
-    if not (is_our_playlist and is_desktop_device):
-        return False
-
-    if playback["is_playing"]:
-        sp.pause_playback()
-        logger.info("Playlist was already playing, paused it")
-    else:
-        sp.start_playback()
-        logger.info("Playlist was paused, resumed it")
-
-    return True
+        return None
 
 
 def start_shuffled_playback(sp, playlist_uri):
@@ -165,9 +137,32 @@ def main():
         logger.error("Couldn't find main playlist")
         return
 
-    if toggle_if_already_playing(sp, main_playlist["uri"]):
-        return
+    playback = get_current_playback(sp)
+    device = playback.get("device") if playback else None
 
+    # Device already active on the desktop app, we can skip
+    # spotify_running_checker entirely (which would otherwise make
+    # its own devices() call to figure out the same thing).
+    if device and device.get("type") == PREFERRED_DEVICE_TYPE:
+        context = playback.get("context")
+        is_our_playlist = context is not None and context.get("uri") == main_playlist["uri"]
+
+        if is_our_playlist:
+            if playback["is_playing"]:
+                sp.pause_playback()
+                logger.info("Playlist was already playing, paused it")
+            else:
+                sp.start_playback()
+                logger.info("Playlist was paused, resumed it")
+            return
+
+        if device.get("is_active"):
+            logger.info(f"Playing '{main_playlist['name']}'")
+            start_shuffled_playback(sp, main_playlist["uri"])
+            return
+
+    # Desktop app isn't active (or Spotify isn't even open yet),
+    # fall through to the full launch/wake flow.
     if not spotify_running_checker(sp):
         logger.error("Failed to open Spotify")
         return
