@@ -1,0 +1,10 @@
+# Secrets and per-machine credentials
+.env
+.cache
+
+# Python cruft
+__pycache__/
+*.pyc
+
+# Runtime log written by logger_setup.py
+*.log
