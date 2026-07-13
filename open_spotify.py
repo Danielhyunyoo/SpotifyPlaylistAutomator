@@ -64,6 +64,11 @@ def _is_spotify_process_running():
             capture_output=True,
             text=True,
             timeout=5,
+            # Without this, Windows pops a visible console for tasklist
+            # itself, since pythonw.exe (our parent) has none for it to
+            # inherit. This is what caused the console flash on every
+            # hotkey press.
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return "Spotify.exe" in result.stdout
     except Exception as e:
@@ -99,10 +104,10 @@ def _get_active_computer_device(sp):
 
 def _wait_for_device(sp, timeout=MAX_WAIT_SECONDS):
     """
-    Polls sp.devices() until a usable device shows up, preferring a
-    Computer-type device (the desktop app we just launched) over
-    anything else. Falls back to the first device seen if a Computer
-    device never turns up in time, rather than failing outright.
+    Polls sp.devices() until the desktop app (a Computer-type device)
+    shows up. Deliberately does NOT fall back to any other device
+    (speakers, phones, etc.), those are never an acceptable stand-in
+    for the PC here, we'd rather fail than play somewhere else.
 
     Also logs a one-time heads-up if Spotify's process is already up
     but still hasn't produced a device after a few seconds, since
@@ -111,7 +116,6 @@ def _wait_for_device(sp, timeout=MAX_WAIT_SECONDS):
     """
     waited = 0.0
     warned_about_update = False
-    fallback_device = None
 
     while waited < timeout:
         devices = sp.devices()["devices"]
@@ -122,9 +126,6 @@ def _wait_for_device(sp, timeout=MAX_WAIT_SECONDS):
 
         if computer_device:
             return computer_device
-
-        if devices and fallback_device is None:
-            fallback_device = devices[0]
 
         if not warned_about_update and waited >= UPDATE_SUSPECTED_AFTER_SECONDS:
             if _is_spotify_process_running():
@@ -137,13 +138,10 @@ def _wait_for_device(sp, timeout=MAX_WAIT_SECONDS):
         time.sleep(POLL_INTERVAL_SECONDS)
         waited += POLL_INTERVAL_SECONDS
 
-    if fallback_device:
-        logger.warning(
-            f"No Computer device showed up in time, falling back to "
-            f"'{fallback_device['name']}'"
-        )
-
-    return fallback_device
+    # No fallback on purpose. Other Connect devices (speakers, phones)
+    # are never an acceptable substitute for the desktop app here, so
+    # we fail cleanly instead of quietly playing somewhere else.
+    return None
 
 
 def _wait_until_active(sp, timeout=TRANSFER_CONFIRM_TIMEOUT_SECONDS):
