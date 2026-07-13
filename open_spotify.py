@@ -21,6 +21,13 @@ logger = get_logger(__name__)
 # Path to the Spotify executable on this machine
 SPOTIFY_EXE = r"C:\Users\Blest\AppData\Roaming\Spotify\Spotify.exe"
 
+# The desktop app registers as this device type. We prefer it
+# specifically, since other always-on Spotify Connect endpoints (a
+# smart speaker, a phone with the app installed, etc.) can otherwise
+# show up in the device list before the client we just launched
+# does, and end up getting picked instead.
+PREFERRED_DEVICE_TYPE = "Computer"
+
 # How long we're willing to poll for a device before giving up.
 # Generous because a pending Spotify auto-update can take well past
 # a normal cold start.
@@ -36,6 +43,13 @@ POLL_INTERVAL_SECONDS = 0.5
 # not just a slow launch. Purely informational, doesn't change
 # behavior, just makes the log less confusing when you go check it.
 UPDATE_SUSPECTED_AFTER_SECONDS = 8
+
+# transfer_playback is asynchronous on Spotify's end. This is how
+# long we're willing to wait for the device to actually report as
+# active afterwards, before handing control back. Skipping this wait
+# is what used to cause an immediate "NO_ACTIVE_DEVICE" error on the
+# very next API call.
+TRANSFER_CONFIRM_TIMEOUT_SECONDS = 5
 
 
 def _is_spotify_process_running():
@@ -64,26 +78,34 @@ def _get_active_device(sp):
     return active_devices[0] if active_devices else None
 
 
-def _wait_for_any_device(sp, timeout=MAX_WAIT_SECONDS):
+def _wait_for_device(sp, timeout=MAX_WAIT_SECONDS):
     """
-    Polls sp.devices() until at least one device shows up or we run
-    out of time. This is what absorbs the extra delay when Spotify
-    is installing an update before it can open, instead of just
-    failing after a fixed short wait.
+    Polls sp.devices() until a usable device shows up, preferring a
+    Computer-type device (the desktop app we just launched) over
+    anything else. Falls back to the first device seen if a Computer
+    device never turns up in time, rather than failing outright.
 
-    Logs a one-time heads-up if the process is already up but still
-    hasn't produced a device after a few seconds, since that pattern
-    (process running, no device yet) is what an in-progress Spotify
-    update looks like from the outside.
+    Also logs a one-time heads-up if Spotify's process is already up
+    but still hasn't produced a device after a few seconds, since
+    that pattern is what an in-progress Spotify update looks like
+    from the outside.
     """
     waited = 0.0
     warned_about_update = False
+    fallback_device = None
 
     while waited < timeout:
-        devices = sp.devices()
+        devices = sp.devices()["devices"]
 
-        if devices["devices"]:
-            return devices["devices"][0]
+        computer_device = next(
+            (d for d in devices if d["type"] == PREFERRED_DEVICE_TYPE), None
+        )
+
+        if computer_device:
+            return computer_device
+
+        if devices and fallback_device is None:
+            fallback_device = devices[0]
 
         if not warned_about_update and waited >= UPDATE_SUSPECTED_AFTER_SECONDS:
             if _is_spotify_process_running():
@@ -96,7 +118,33 @@ def _wait_for_any_device(sp, timeout=MAX_WAIT_SECONDS):
         time.sleep(POLL_INTERVAL_SECONDS)
         waited += POLL_INTERVAL_SECONDS
 
-    return None
+    if fallback_device:
+        logger.warning(
+            f"No Computer device showed up in time, falling back to "
+            f"'{fallback_device['name']}'"
+        )
+
+    return fallback_device
+
+
+def _wait_until_active(sp, timeout=TRANSFER_CONFIRM_TIMEOUT_SECONDS):
+    """
+    Polls until some device reports is_active, or we run out of
+    time. Called right after transfer_playback, since that call
+    returns before the transfer has actually finished on Spotify's
+    side, and issuing another command too soon fails with
+    NO_ACTIVE_DEVICE.
+    """
+    waited = 0.0
+
+    while waited < timeout:
+        if _get_active_device(sp):
+            return True
+
+        time.sleep(0.3)
+        waited += 0.3
+
+    return False
 
 
 def spotify_running_checker(sp):
@@ -134,7 +182,7 @@ def spotify_running_checker(sp):
     # fixed delay. Also covers the case where Spotify updates itself
     # before opening, since we just keep waiting up to MAX_WAIT_SECONDS.
     logger.info("Waiting for Spotify to report a device")
-    target_device = _wait_for_any_device(sp)
+    target_device = _wait_for_device(sp)
 
     if not target_device:
         logger.error("Timed out waiting for a Spotify device to appear")
@@ -147,9 +195,17 @@ def spotify_running_checker(sp):
         # the active one without starting any audio, so there's no
         # brief blip like the old start_playback + pause combo had
         sp.transfer_playback(device_id=target_device["id"], force_play=False)
-        logger.info("Device activated")
-        return True
     except Exception as e:
         logger.error(f"Couldn't activate device: {e}")
         logger.error("Play something in Spotify manually, then run again")
         return False
+
+    # transfer_playback returns before the transfer is actually done.
+    # Wait for it to land before handing control back, otherwise the
+    # very next command (shuffle/start_playback) can fail with
+    # NO_ACTIVE_DEVICE even though we "just" activated it.
+    if not _wait_until_active(sp):
+        logger.warning("Device transfer may not have finished in time")
+
+    logger.info("Device activated")
+    return True

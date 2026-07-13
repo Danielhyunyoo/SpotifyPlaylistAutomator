@@ -10,6 +10,7 @@ the same key works whether you're starting fresh or just pausing.
 """
 
 import os
+import time
 
 import spotipy
 from dotenv import load_dotenv
@@ -26,6 +27,13 @@ logger = get_logger(__name__)
 # gets logged so you can copy it in here afterwards.
 MAIN_PLAYLIST_URI = None
 MAIN_PLAYLIST_NAME = "It's Raining After All"
+
+# How many times to retry starting playback if Spotify's API says
+# the device isn't active yet. Belt-and-suspenders on top of the
+# wait already done in open_spotify.py, since this can still happen
+# if Spotify is just being slow to sync device state.
+PLAYBACK_RETRY_ATTEMPTS = 3
+PLAYBACK_RETRY_DELAY_SECONDS = 1.5
 
 
 def build_client():
@@ -112,6 +120,34 @@ def toggle_if_already_playing(sp, main_playlist_uri):
     return True
 
 
+def start_shuffled_playback(sp, playlist_uri):
+    """
+    Turns on shuffle and starts playback of the given playlist,
+    retrying a few times if Spotify reports the device isn't active
+    yet. This can happen even after open_spotify.py already waited
+    for the transfer to land, since Spotify's device state can lag
+    a bit further behind than that.
+    """
+    for attempt in range(1, PLAYBACK_RETRY_ATTEMPTS + 1):
+        try:
+            # Shuffle is turned on BEFORE playback starts. Doing it
+            # the other way around (like the old version did) plays
+            # track 1 for a beat before shuffle kicks in, this avoids
+            # that.
+            sp.shuffle(True)
+            sp.start_playback(context_uri=playlist_uri)
+            logger.info("Playlist is running")
+            return True
+        except Exception as e:
+            logger.warning(f"Playback attempt {attempt}/{PLAYBACK_RETRY_ATTEMPTS} failed: {e}")
+
+            if attempt < PLAYBACK_RETRY_ATTEMPTS:
+                time.sleep(PLAYBACK_RETRY_DELAY_SECONDS)
+
+    logger.error("Gave up starting playback after retries")
+    return False
+
+
 def main():
     sp = build_client()
 
@@ -129,16 +165,7 @@ def main():
         return
 
     logger.info(f"Playing '{main_playlist['name']}'")
-
-    try:
-        # Shuffle is turned on BEFORE playback starts. Doing it the
-        # other way around (like the old version did) plays track 1
-        # for a beat before shuffle kicks in, this avoids that.
-        sp.shuffle(True)
-        sp.start_playback(context_uri=main_playlist["uri"])
-        logger.info("Playlist is running")
-    except Exception as e:
-        logger.error(f"Error starting playback: {e}")
+    start_shuffled_playback(sp, main_playlist["uri"])
 
 
 if __name__ == "__main__":
