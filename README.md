@@ -6,7 +6,7 @@ Tool that automatically starts shuffling your primary Spotify playlist.
 2. Create an app at https://developer.spotify.com/dashboard to get a client ID and secret
 3. Copy `.env.example` to `.env` and fill in `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`
 4. Update the Spotify.exe path in `open_spotify.py` if your setup differs
-5. Copy `spotify_auto_start.example.ahk` to `spotify_auto_start.ahk`, fill in your own paths, then run it with AutoHotkey. This filename is gitignored, so your personal copy with your paths in it never gets committed. Use pythonw.exe's full file path rather than just "pythonw", the bare name doesn't reliably resolve on every machine even when python.exe does, see the comments in the example file for how to find it.
+5. Copy `spotify_auto_start.example.ahk` to `spotify_auto_start.ahk`, fill in your own paths, then run it with AutoHotkey. This filename is gitignored, so your personal copy with your paths in it never gets committed. Use pythonw.exe's full file path rather than just "pythonw" (see the comments in the example file for how to find it), and note it launches via a raw CreateProcess call rather than plain `Run`, since Windows 11's default-terminal-app setting can otherwise still flash a window and even kill the script if you close it.
 
 # How To Use:
 - The hotkey launches/wakes Spotify and plays your main playlist on shuffle, no terminal window shown
