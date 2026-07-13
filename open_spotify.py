@@ -78,6 +78,25 @@ def _get_active_device(sp):
     return active_devices[0] if active_devices else None
 
 
+def _get_active_computer_device(sp):
+    """
+    Returns the active device only if it's the desktop app
+    specifically. A phone or smart speaker left "active" from an
+    earlier session otherwise satisfies the naive "is anything
+    active" check forever, since Spotify keeps reporting the last
+    controlled device as active even when nothing is currently
+    playing on it. Pressing the hotkey means we want the PC, so that
+    stale state shouldn't count as "ready."
+    """
+    devices = sp.devices()["devices"]
+
+    for device in devices:
+        if device["is_active"] and device["type"] == PREFERRED_DEVICE_TYPE:
+            return device
+
+    return None
+
+
 def _wait_for_device(sp, timeout=MAX_WAIT_SECONDS):
     """
     Polls sp.devices() until a usable device shows up, preferring a
@@ -155,13 +174,13 @@ def spotify_running_checker(sp):
     """
     logger.info("Checking for active Spotify devices")
 
-    active_device = _get_active_device(sp)
+    active_device = _get_active_computer_device(sp)
 
     if active_device:
-        logger.info("Active device found")
+        logger.info("Active desktop device found")
         return True
 
-    logger.info("No active device found")
+    logger.info("No active desktop device found (may still be active on another device)")
 
     # Only launch Spotify if it isn't already running somewhere. If
     # it's running but just has no active device yet, we don't need

@@ -16,7 +16,7 @@ import spotipy
 from dotenv import load_dotenv
 from spotipy.oauth2 import SpotifyOAuth
 
-from open_spotify import spotify_running_checker
+from open_spotify import spotify_running_checker, PREFERRED_DEVICE_TYPE
 from logger_setup import get_logger
 
 logger = get_logger(__name__)
@@ -90,10 +90,16 @@ def find_main_playlist(sp):
 
 def toggle_if_already_playing(sp, main_playlist_uri):
     """
-    If the main playlist is already the active context on some
-    device, just toggle play/pause instead of doing a full relaunch.
-    Returns True if it handled things (caller should stop there),
-    False if the normal launch-and-play flow should run instead.
+    If the main playlist is already the active context specifically
+    on the desktop app, just toggle play/pause instead of doing a
+    full relaunch. Returns True if it handled things (caller should
+    stop there), False if the normal launch-and-play flow should run
+    instead.
+
+    Deliberately scoped to the Computer device only, so if the
+    playlist happens to be playing on something else (a speaker,
+    a phone), we don't toggle that, we fall through and take over
+    on the PC instead, since that's what pressing the hotkey means.
     """
     try:
         playback = sp.current_playback()
@@ -104,10 +110,12 @@ def toggle_if_already_playing(sp, main_playlist_uri):
     if not playback or not playback.get("device"):
         return False
 
+    device = playback["device"]
     context = playback.get("context")
     is_our_playlist = context is not None and context.get("uri") == main_playlist_uri
+    is_desktop_device = device.get("type") == PREFERRED_DEVICE_TYPE
 
-    if not is_our_playlist:
+    if not (is_our_playlist and is_desktop_device):
         return False
 
     if playback["is_playing"]:
