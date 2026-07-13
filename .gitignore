@@ -2,7 +2,12 @@
 .env
 .cache
 
+# Personal hotkey script with your own machine's paths in it.
+# Copy spotify_auto_start.example.ahk to this filename and fill it in.
+spotify_auto_start.ahk
+
 # Python cruft
+.venv/
 __pycache__/
 *.pyc
 

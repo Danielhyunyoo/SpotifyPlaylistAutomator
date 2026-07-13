@@ -26,8 +26,16 @@ SPOTIFY_EXE = r"C:\Users\Blest\AppData\Roaming\Spotify\Spotify.exe"
 # a normal cold start.
 MAX_WAIT_SECONDS = 45
 
-# How often we re-check for a device while waiting
-POLL_INTERVAL_SECONDS = 1
+# How often we re-check for a device while waiting. Short, since a
+# quick poll interval is what makes this feel instant once Spotify
+# actually is ready, at the cost of a bit more CPU while waiting.
+POLL_INTERVAL_SECONDS = 0.5
+
+# After this many seconds of the process being up but still no
+# device, we log a heads-up that this is probably an update running,
+# not just a slow launch. Purely informational, doesn't change
+# behavior, just makes the log less confusing when you go check it.
+UPDATE_SUSPECTED_AFTER_SECONDS = 8
 
 
 def _is_spotify_process_running():
@@ -62,14 +70,28 @@ def _wait_for_any_device(sp, timeout=MAX_WAIT_SECONDS):
     out of time. This is what absorbs the extra delay when Spotify
     is installing an update before it can open, instead of just
     failing after a fixed short wait.
+
+    Logs a one-time heads-up if the process is already up but still
+    hasn't produced a device after a few seconds, since that pattern
+    (process running, no device yet) is what an in-progress Spotify
+    update looks like from the outside.
     """
     waited = 0.0
+    warned_about_update = False
 
     while waited < timeout:
         devices = sp.devices()
 
         if devices["devices"]:
             return devices["devices"][0]
+
+        if not warned_about_update and waited >= UPDATE_SUSPECTED_AFTER_SECONDS:
+            if _is_spotify_process_running():
+                logger.info(
+                    f"Spotify is running but no device after {waited:.0f}s, "
+                    "likely installing an update, still waiting"
+                )
+            warned_about_update = True
 
         time.sleep(POLL_INTERVAL_SECONDS)
         waited += POLL_INTERVAL_SECONDS
@@ -95,7 +117,9 @@ def spotify_running_checker(sp):
 
     # Only launch Spotify if it isn't already running somewhere. If
     # it's running but just has no active device yet, we don't need
-    # to relaunch it, just wake it below.
+    # to relaunch it, just wake it below. This is the main speed win,
+    # since skipping a redundant launch avoids Spotify's own startup
+    # cost entirely.
     if not _is_spotify_process_running():
         logger.info("Launching Spotify")
 
@@ -105,8 +129,10 @@ def spotify_running_checker(sp):
             logger.error(f"Failed to open Spotify: {e}")
             return False
 
-    # Poll instead of a fixed sleep. Covers both a normal cold start
-    # and the slower case where Spotify updates itself before opening.
+    # Poll instead of a fixed sleep, and poll fast, so we grab a
+    # device the instant it's available rather than always eating a
+    # fixed delay. Also covers the case where Spotify updates itself
+    # before opening, since we just keep waiting up to MAX_WAIT_SECONDS.
     logger.info("Waiting for Spotify to report a device")
     target_device = _wait_for_any_device(sp)
 
