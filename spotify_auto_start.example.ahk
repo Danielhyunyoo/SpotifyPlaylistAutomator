@@ -16,12 +16,23 @@
     ; playlist_automator.py. pythonw.exe (not python.exe) so no
     ; console window ever flashes on screen.
     ;
+    ; IMPORTANT: use pythonw's FULL file path, not just "pythonw".
+    ; On some machines the bare command name doesn't resolve cleanly
+    ; even though python.exe does (they can go through different
+    ; PATH/alias lookups despite living in the same folder), and a
+    ; failed lookup shows up as a blank terminal flashing on every
+    ; launch before it falls back and succeeds anyway. Run this in
+    ; PowerShell to find your real path:
+    ;
+    ;   $py = (Get-Command python).Source
+    ;   Get-ChildItem (Split-Path $py) -Filter "pythonw.exe"
+    ;
     ; Second value is the working directory, should be the folder
     ; this project lives in, so playlist_automator.py can find its
     ; .env and write its log file next to itself.
     ;
     ; ", Hide" is a belt-and-suspenders backup in case pythonw still
     ; tries to show something.
-    Run, pythonw "C:\path\to\PlaylistPlayer\playlist_automator.py", C:\path\to\PlaylistPlayer, Hide
+    Run, "C:\path\to\Python\pythonw.exe" "C:\path\to\PlaylistPlayer\playlist_automator.py", C:\path\to\PlaylistPlayer, Hide
     return
 }
